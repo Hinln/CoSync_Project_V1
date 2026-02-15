@@ -1,0 +1,28 @@
+# ============================================================
+# 同频 (CoSync) 一键部署 Docker Compose 配置
+# ============================================================
+# 使用方法：
+#   1. 复制 backend/.env.example 为 backend/.env 并填写配置
+#   2. docker-compose up -d
+#   3. 访问 http://localhost:3000/api/health 验证服务状态
+# ============================================================
+
+version: "3.8"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cosync-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    ports:
+      - "${BACKEND_PORT:-3000}:3000"
+    networks:
+      - cosync-network
+
+networks:
+  cosync-network:
+    driver: bridge
