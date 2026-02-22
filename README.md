@@ -40,19 +40,26 @@
 git clone https://github.com/Hinln/CoSync_Project_V1.git
 cd CoSync_Project_V1
 ```
-2. 环境配置
-在 backend 目录下，根据模板创建你的环境变量文件：
-```bash
-cp backend/.env.example backend/.env
-```
-注意：你需要在阿里云控制台申请认证与短信的 AccessKey，并按 .env.example 填写。
 
-3. 一键启动 (Docker)
-我们提供了部署脚本：
+### 2. 快速部署（推荐）
+我们提供了一键部署脚本，交互式引导你完成环境变量配置并启动服务。
+
+**Linux / macOS:**
 ```bash
-chmod +x deploy.sh
-./deploy.sh
+chmod +x install.sh
+./install.sh
 ```
+
+**Windows (PowerShell):**
+```powershell
+.\install.ps1
+```
+
+### 3. 手动部署（高级用户）
+如果你更喜欢手动配置：
+1. `cp backend/.env.example backend/.env`
+2. 编辑 `.env` 填入数据库和阿里云密钥
+3. `docker compose up -d`
 
 ## 📅 路线图 (Roadmap)
 - [x] V1 核心架构搭建

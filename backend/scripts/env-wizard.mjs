@@ -20,6 +20,7 @@ const run = async () => {
   const aliyunKey = await ask("阿里云认证 AccessKeyId：");
   const aliyunSecret = await ask("阿里云认证 AccessKeySecret：");
   const aliyunScene = await ask("阿里云认证场景ID：");
+  const aliyunRegion = await ask("阿里云认证 RegionId（如 ap-southeast-1）：", "ap-southeast-1");
   const domain = await ask("站点域名（如 https://yourdomain.com）：", "https://yourdomain.com");
   const verifyReturn = await ask("认证回跳地址（如 https://yourdomain.com/verify-callback）：", `${domain}/verify-callback`);
   const appId = await ask("应用 ID：", "cosync_app");
@@ -42,6 +43,7 @@ const run = async () => {
     `ALIYUN_ACCESS_KEY=${aliyunKey}`,
     `ALIYUN_ACCESS_SECRET=${aliyunSecret}`,
     `ALIYUN_SCENE_ID=${aliyunScene}`,
+    `ALIYUN_REGION=${aliyunRegion}`,
     `VERIFY_RETURN_URL=${verifyReturn}`,
     `VITE_APP_ID=${appId}`,
     `OAUTH_SERVER_URL=${domain}`,

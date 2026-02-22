@@ -1,9 +1,10 @@
 import { z } from "zod";
-import { COOKIE_NAME } from "../shared/const.js";
+import { COOKIE_NAME, ONE_YEAR_MS } from "../shared/const.js";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, protectedProcedure, router } from "./_core/trpc";
 import * as db from "./db";
+import { sdk } from "./_core/sdk";
 // 引入阿里云 SDK
 import OpenApi, * as $OpenApi from '@alicloud/openapi-client';
 import { ENV } from "./_core/env";
@@ -22,12 +23,17 @@ const InitSmartVerifyRequestCtor =
   CloudAuthMod?.InitSmartVerifyRequest ?? CloudAuthMod?.default?.InitSmartVerifyRequest;
 const DescribeSmartVerifyRequestCtor =
   CloudAuthMod?.DescribeSmartVerifyRequest ?? CloudAuthMod?.default?.DescribeSmartVerifyRequest;
+const InitFaceVerifyRequestCtor =
+  CloudAuthMod?.InitFaceVerifyRequest ?? CloudAuthMod?.default?.InitFaceVerifyRequest;
+const DescribeFaceVerifyRequestCtor =
+  CloudAuthMod?.DescribeFaceVerifyRequest ?? CloudAuthMod?.default?.DescribeFaceVerifyRequest;
 
 // 阿里云客户端初始化
 const authConfig = new $OpenApi.Config({
   accessKeyId: ENV.aliYunAccessKey,
   accessKeySecret: ENV.aliYunAccessSecret,
   endpoint: 'cloudauth.aliyuncs.com',
+  regionId: ENV.aliYunRegion,
 });
 const authClient = new CloudAuthClientCtor(authConfig);
 
@@ -129,19 +135,33 @@ export const appRouter = router({
         const user = await db.getUserById(ctx.user.id);
         if (user?.isVerified) throw new Error("您已完成认证");
 
-        const request = new InitSmartVerifyRequestCtor({
-          sceneId: Number(ENV.aliYunSceneId),
-          outerOrderNo: `V_${ctx.user.id}_${Date.now()}`,
-          mode: 'LIVENESS',
-          certName: input.realName,
-          certNo: input.idNumber,
-          metaInfo: input.metaInfo,
-        });
+        const request =
+          InitFaceVerifyRequestCtor
+            ? new InitFaceVerifyRequestCtor({
+                sceneId: Number(ENV.aliYunSceneId),
+                outerOrderNo: `V_${ctx.user.id}_${Date.now()}`,
+                mode: 'LIVENESS',
+                certName: input.realName,
+                certNo: input.idNumber,
+                metaInfo: input.metaInfo,
+                returnUrl: ENV.verifyReturnUrl,
+              })
+            : new InitSmartVerifyRequestCtor({
+                sceneId: Number(ENV.aliYunSceneId),
+                outerOrderNo: `V_${ctx.user.id}_${Date.now()}`,
+                mode: 'LIVENESS',
+                certName: input.realName,
+                certNo: input.idNumber,
+                metaInfo: input.metaInfo,
+                returnUrl: ENV.verifyReturnUrl,
+              });
 
-        const response = await authClient.initSmartVerify(request);
+        const response = InitFaceVerifyRequestCtor
+          ? await authClient.initFaceVerify(request)
+          : await authClient.initSmartVerify(request);
         return {
-          certifyId: response.body.resultObject.certifyId,
-          certifyUrl: `https://v.rpns8.com/u/${response.body.resultObject.certifyId}`
+          certifyId: response.body?.resultObject?.certifyId || response.body?.resultObject?.CertifyId,
+          certifyUrl: response.body?.resultObject?.certifyUrl || response.body?.resultObject?.CertifyUrl,
         };
       }),
 
@@ -152,14 +172,22 @@ export const appRouter = router({
         idNumber: z.string() 
       }))
       .mutation(async ({ ctx, input }) => {
-        const request = new DescribeSmartVerifyRequestCtor({
-          sceneId: Number(ENV.aliYunSceneId),
-          certifyId: input.certifyId,
-        });
+        const request =
+          DescribeFaceVerifyRequestCtor
+            ? new DescribeFaceVerifyRequestCtor({
+                sceneId: Number(ENV.aliYunSceneId),
+                certifyId: input.certifyId,
+              })
+            : new DescribeSmartVerifyRequestCtor({
+                sceneId: Number(ENV.aliYunSceneId),
+                certifyId: input.certifyId,
+              });
 
-        const response = await authClient.describeSmartVerify(request);
+        const response = DescribeFaceVerifyRequestCtor
+          ? await authClient.describeFaceVerify(request)
+          : await authClient.describeSmartVerify(request);
         
-        if (response.body.resultObject.passed === 'T') {
+        if ((response.body?.resultObject?.passed || response.body?.resultObject?.Passed) === 'T') {
           // 提取性别：奇数男(1)，偶数女(2)
           const char17 = input.idNumber.charAt(16);
           const gender = parseInt(char17, 10) % 2 === 1 ? 1 : 2;
@@ -428,6 +456,40 @@ export const appRouter = router({
   }),
 
   upload: router({
+    // 获取 OSS 直传签名（STS / Policy 模式）
+    getUploadSign: protectedProcedure
+      .input(z.object({ fileName: z.string().min(1) }))
+      .mutation(async ({ ctx, input }) => {
+        const { createRequire } = await import("module");
+        const require = createRequire(import.meta.url);
+        const OSS = require('ali-oss');
+
+        const client = new OSS({
+          region: ENV.ossRegion,
+          accessKeyId: ENV.ossAccessKeyId || ENV.aliYunAccessKey,
+          accessKeySecret: ENV.ossAccessKeySecret || ENV.aliYunAccessSecret,
+          bucket: ENV.ossBucket,
+          secure: true,
+        });
+
+        // 构造文件路径：uploads/userId/timestamp-filename
+        const key = `uploads/${ctx.user.id}/${Date.now()}-${input.fileName}`;
+        
+        // 生成签名 URL，有效期 300 秒
+        const url = client.signatureUrl(key, {
+          method: 'PUT',
+          expires: 300,
+          'Content-Type': 'image/jpeg', // 简单起见，默认 image/jpeg，可根据 input.fileType 动态调整
+        });
+
+        return {
+          uploadUrl: url,
+          key: key,
+          publicUrl: `https://${ENV.ossBucket}.${ENV.ossRegion}.aliyuncs.com/${key}`
+        };
+      }),
+
+    // 保留原有 base64 上传作为备用（不推荐，流量走服务器）
     image: protectedProcedure
       .input(z.object({ base64: z.string(), fileName: z.string() }))
       .mutation(async ({ ctx, input }) => {
@@ -444,6 +506,12 @@ export const appRouter = router({
     sendCode: publicProcedure
       .input(z.object({ phone: z.string().regex(/^1\d{10}$/) }))
       .mutation(async ({ input }) => {
+        const count1m = await db.countSmsCodes(input.phone, 60);
+        if (count1m >= 1) return { success: false, message: "发送太频繁，请稍后再试" };
+        
+        const count1h = await db.countSmsCodes(input.phone, 3600);
+        if (count1h >= 10) return { success: false, message: "发送次数过多，请稍后再试" };
+
         const code = Math.floor(100000 + Math.random() * 900000).toString();
         const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
         await db.createSmsCode(input.phone, code, expiresAt);
@@ -460,16 +528,58 @@ export const appRouter = router({
         });
         try {
           await smsClient.sendSms(req);
-        } catch (e) {
-          // 保持接口幂等：即使短信通道失败，验证码仍已写库，可继续 verifyCode
+        } catch (e: any) {
+          console.error("SMS send failed:", e);
+          return { success: false, message: "短信发送失败: " + (e.data?.Message || e.message || "未知错误") };
         }
         return { success: true, ttl: 300 };
       }),
     verifyCode: publicProcedure
       .input(z.object({ phone: z.string().regex(/^1\d{10}$/), code: z.string().min(4).max(6) }))
-      .mutation(async ({ input }) => {
+      .mutation(async ({ ctx, input }) => {
         const ok = await db.verifySmsCode(input.phone, input.code);
-        return { success: ok };
+        if (!ok) return { success: false, message: "验证码无效或已过期" };
+
+        let user = await db.getUserByPhone(input.phone);
+        if (!user) {
+          // Auto-register
+          const openId = `phone:${input.phone}`;
+          await db.upsertUser({
+            openId,
+            name: `用户${input.phone.slice(-4)}`,
+            phone: input.phone,
+            loginMethod: "phone",
+            role: "user",
+          });
+          user = await db.getUserByPhone(input.phone);
+        }
+
+        if (!user) return { success: false, message: "登录失败，请重试" };
+
+        // Issue Session
+        const sessionToken = await sdk.createSessionToken(user.openId, {
+          name: user.name || "",
+          expiresInMs: ONE_YEAR_MS,
+        });
+
+        const cookieOptions = getSessionCookieOptions(ctx.req);
+        ctx.res.cookie(COOKIE_NAME, sessionToken, { ...cookieOptions, maxAge: ONE_YEAR_MS });
+
+        return {
+          success: true,
+          token: sessionToken,
+          user: {
+            id: user.id,
+            nickname: user.nickname || user.name || `用户${user.id}`,
+            avatar: user.avatar,
+            phone: user.phone,
+            bio: user.bio,
+            gender: user.gender,
+            isVerified: user.isVerified,
+            verifiedAt: user.verifiedAt?.toISOString() || null,
+            createdAt: user.createdAt.toISOString(),
+          }
+        };
       }),
   }),
 

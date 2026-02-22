@@ -432,3 +432,14 @@ export async function verifySmsCode(phone: string, code: string): Promise<boolea
   await db.update(smsCodes).set({ used: true }).where(eq(smsCodes.id, record.id));
   return true;
 }
+
+export async function countSmsCodes(phone: string, seconds: number): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+  const since = new Date(Date.now() - seconds * 1000);
+  const result = await db
+    .select({ count: sql`count(*)` })
+    .from(smsCodes)
+    .where(and(eq(smsCodes.phone, phone), sql`${smsCodes.createdAt} >= ${since}`));
+  return Number((result[0] as any).count);
+}
